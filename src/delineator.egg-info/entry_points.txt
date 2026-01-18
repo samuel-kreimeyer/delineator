@@ -1,0 +1,2 @@
+[console_scripts]
+delineator = delineator.cli:main

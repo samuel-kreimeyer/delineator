@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.landxml.org/schema/LandXML-1.2 http://www.landxml.org/schema/LandXML-1.2/LandXML-1.2.xsd"
+         date="2024-01-01" time="12:00:00" version="1.2">
+
+  <Units>
+    <Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter"
+            temperatureUnit="celsius" pressureUnit="milliBars"
+            angularUnit="decimal degrees" directionUnit="decimal degrees"/>
+  </Units>
+
+  <CoordinateSystem epsgCode="32618" desc="WGS 84 / UTM zone 18N"/>
+
+  <CgPoints>
+    <!-- Study point at the lowest point of the bowl (outlet) -->
+    <CgPoint name="Outlet_1">500050.0 4500050.0 95.0</CgPoint>
+    <!-- Additional study point -->
+    <CgPoint name="Outlet_2">500150.0 4500150.0 97.0</CgPoint>
+  </CgPoints>
+
+  <Surfaces>
+    <Surface name="Sample_TIN" desc="Sample bowl-shaped TIN surface">
+      <Definition surfType="TIN">
+        <Pnts>
+          <!-- A 5x5 grid of points creating a bowl-shaped surface -->
+          <!-- Row 1 (northing=4500200) -->
+          <P id="1">4500200.0 500000.0 110.0</P>
+          <P id="2">4500200.0 500050.0 108.0</P>
+          <P id="3">4500200.0 500100.0 107.0</P>
+          <P id="4">4500200.0 500150.0 108.0</P>
+          <P id="5">4500200.0 500200.0 110.0</P>
+          <!-- Row 2 (northing=4500150) -->
+          <P id="6">4500150.0 500000.0 108.0</P>
+          <P id="7">4500150.0 500050.0 103.0</P>
+          <P id="8">4500150.0 500100.0 100.0</P>
+          <P id="9">4500150.0 500150.0 103.0</P>
+          <P id="10">4500150.0 500200.0 108.0</P>
+          <!-- Row 3 (northing=4500100) -->
+          <P id="11">4500100.0 500000.0 107.0</P>
+          <P id="12">4500100.0 500050.0 100.0</P>
+          <P id="13">4500100.0 500100.0 95.0</P>
+          <P id="14">4500100.0 500150.0 100.0</P>
+          <P id="15">4500100.0 500200.0 107.0</P>
+          <!-- Row 4 (northing=4500050) -->
+          <P id="16">4500050.0 500000.0 108.0</P>
+          <P id="17">4500050.0 500050.0 103.0</P>
+          <P id="18">4500050.0 500100.0 100.0</P>
+          <P id="19">4500050.0 500150.0 103.0</P>
+          <P id="20">4500050.0 500200.0 108.0</P>
+          <!-- Row 5 (northing=4500000) -->
+          <P id="21">4500000.0 500000.0 110.0</P>
+          <P id="22">4500000.0 500050.0 108.0</P>
+          <P id="23">4500000.0 500100.0 107.0</P>
+          <P id="24">4500000.0 500150.0 108.0</P>
+          <P id="25">4500000.0 500200.0 110.0</P>
+        </Pnts>
+        <Faces>
+          <!-- Triangles connecting the points -->
+          <!-- Row 1-2 triangles -->
+          <F>1 2 6</F>
+          <F>2 7 6</F>
+          <F>2 3 7</F>
+          <F>3 8 7</F>
+          <F>3 4 8</F>
+          <F>4 9 8</F>
+          <F>4 5 9</F>
+          <F>5 10 9</F>
+          <!-- Row 2-3 triangles -->
+          <F>6 7 11</F>
+          <F>7 12 11</F>
+          <F>7 8 12</F>
+          <F>8 13 12</F>
+          <F>8 9 13</F>
+          <F>9 14 13</F>
+          <F>9 10 14</F>
+          <F>10 15 14</F>
+          <!-- Row 3-4 triangles -->
+          <F>11 12 16</F>
+          <F>12 17 16</F>
+          <F>12 13 17</F>
+          <F>13 18 17</F>
+          <F>13 14 18</F>
+          <F>14 19 18</F>
+          <F>14 15 19</F>
+          <F>15 20 19</F>
+          <!-- Row 4-5 triangles -->
+          <F>16 17 21</F>
+          <F>17 22 21</F>
+          <F>17 18 22</F>
+          <F>18 23 22</F>
+          <F>18 19 23</F>
+          <F>19 24 23</F>
+          <F>19 20 24</F>
+          <F>20 25 24</F>
+        </Faces>
+      </Definition>
+    </Surface>
+  </Surfaces>
+
+</LandXML>

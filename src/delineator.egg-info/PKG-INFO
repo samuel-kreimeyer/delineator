@@ -1,0 +1,38 @@
+Metadata-Version: 2.4
+Name: delineator
+Version: 0.1.0
+Summary: Watershed delineation automation from LandXML TIN surfaces using WhiteBox Tools
+Author: Delineator Contributors
+License: MIT
+Project-URL: Homepage, https://github.com/example/delineator
+Project-URL: Documentation, https://github.com/example/delineator#readme
+Project-URL: Repository, https://github.com/example/delineator
+Keywords: watershed,hydrology,GIS,LandXML,TIN,DEM
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Scientific/Engineering :: GIS
+Classifier: Topic :: Scientific/Engineering :: Hydrology
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: whitebox>=2.3.0
+Requires-Dist: numpy>=1.21.0
+Requires-Dist: matplotlib>=3.4.0
+Requires-Dist: rasterio>=1.3.0
+Requires-Dist: geopandas>=0.12.0
+Requires-Dist: shapely>=2.0.0
+Requires-Dist: pyproj>=3.3.0
+Requires-Dist: lxml>=4.9.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+Dynamic: license-file
