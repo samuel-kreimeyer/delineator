@@ -1,6 +1,5 @@
 """LandXML file parser for TIN surfaces and COGO points."""
 
-import re
 from pathlib import Path
 from typing import Optional
 
@@ -14,9 +13,6 @@ from delineator.utils.logging import get_logger
 class LandXMLParser:
     """Parser for LandXML files containing TIN surfaces."""
 
-    # Namespace patterns for different LandXML versions
-    NAMESPACE_PATTERN = re.compile(r"\{(http://www\.landxml\.org/schema/LandXML-\d+\.\d+)\}")
-
     def __init__(self, file_path: Path):
         """Initialize the parser.
 
@@ -25,67 +21,163 @@ class LandXMLParser:
         """
         self.file_path = Path(file_path)
         self.logger = get_logger(__name__)
-        self._tree: Optional[etree._ElementTree] = None
-        self._root: Optional[etree._Element] = None
-        self._namespace: Optional[str] = None
-        self._nsmap: dict[str, str] = {}
         self.epsg_code: Optional[int] = None
+        self._parsed = False
+        self._tin_surface: Optional[TINSurface] = None
+        self._cogo_points: list[StudyPoint] = []
 
     def _parse_file(self) -> None:
-        """Parse the XML file and extract namespace."""
-        if self._tree is not None:
+        """Parse the XML file and extract relevant data using iterparse."""
+        if self._parsed:
             return
 
+        self._parsed = True
+        tin_surface: Optional[TINSurface] = None
+        cogo_points: list[StudyPoint] = []
+        cogo_idx = 0
+
+        surface_found = False
+        in_surface = False
+        in_definition = False
+        in_pnts = False
+        in_faces = False
+        in_cgpoints = False
+
         try:
-            self._tree = etree.parse(str(self.file_path))
-            self._root = self._tree.getroot()
+            context = etree.iterparse(
+                str(self.file_path), events=("start", "end"), recover=False
+            )
         except etree.XMLSyntaxError as e:
             raise LandXMLParseError(f"Invalid XML syntax: {e}")
         except Exception as e:
             raise LandXMLParseError(f"Error parsing file: {e}")
 
-        # Extract namespace
-        if self._root.tag.startswith("{"):
-            match = self.NAMESPACE_PATTERN.match(self._root.tag)
-            if match:
-                self._namespace = match.group(1)
-                self._nsmap["lx"] = self._namespace
-                self.logger.debug(f"Detected namespace: {self._namespace}")
+        def _local_name(tag: str) -> str:
+            if tag.startswith("{"):
+                return tag.split("}", 1)[1]
+            return tag
 
-        # Extract EPSG code if present
-        self._extract_epsg_code()
+        for event, elem in context:
+            tag = _local_name(elem.tag)
 
-    def _extract_epsg_code(self) -> None:
-        """Extract EPSG code from CoordinateSystem element."""
-        if self._root is None:
-            return
+            if event == "start":
+                if tag == "Surface" and not surface_found:
+                    surface_found = True
+                    in_surface = True
+                    surface_name = elem.get("name", "Unnamed")
+                    self.logger.info(f"Parsing surface: {surface_name}")
+                    tin_surface = TINSurface(name=surface_name)
+                elif tag == "Surface" and surface_found:
+                    in_surface = False
 
-        # Try with namespace
-        if self._nsmap:
-            coord_sys = self._root.find(".//lx:CoordinateSystem", self._nsmap)
-        else:
-            coord_sys = self._root.find(".//CoordinateSystem")
+                if in_surface and tag == "Definition":
+                    in_definition = True
+                if in_surface and in_definition and tag == "Pnts":
+                    in_pnts = True
+                if in_surface and in_definition and tag == "Faces":
+                    in_faces = True
+                if tag == "CgPoints":
+                    in_cgpoints = True
 
-        if coord_sys is not None:
-            epsg_attr = coord_sys.get("epsgCode")
-            if epsg_attr:
-                try:
-                    self.epsg_code = int(epsg_attr)
-                    self.logger.info(f"Found EPSG code: {self.epsg_code}")
-                except ValueError:
-                    self.logger.warning(f"Invalid EPSG code: {epsg_attr}")
+            elif event == "end":
+                if tag == "CoordinateSystem":
+                    epsg_attr = elem.get("epsgCode")
+                    if epsg_attr and self.epsg_code is None:
+                        try:
+                            self.epsg_code = int(epsg_attr)
+                            self.logger.info(f"Found EPSG code: {self.epsg_code}")
+                        except ValueError:
+                            self.logger.warning(f"Invalid EPSG code: {epsg_attr}")
 
-    def _find_elements(self, xpath: str) -> list[etree._Element]:
-        """Find elements using XPath, handling namespaces."""
-        if self._root is None:
-            return []
+                if in_pnts and tag == "P" and tin_surface is not None:
+                    point_id = elem.get("id")
+                    if point_id is not None:
+                        try:
+                            point_id = int(point_id)
+                        except ValueError:
+                            self.logger.warning(f"Invalid point ID: {point_id}")
+                            point_id = None
+                        if point_id is not None and elem.text:
+                            parts = elem.text.strip().split()
+                            if len(parts) < 3:
+                                self.logger.warning(
+                                    f"Point {point_id} has insufficient coordinates"
+                                )
+                            else:
+                                try:
+                                    northing = float(parts[0])
+                                    easting = float(parts[1])
+                                    elevation = float(parts[2])
+                                    point = Point3D(
+                                        x=easting, y=northing, z=elevation, id=point_id
+                                    )
+                                    tin_surface.add_point(point)
+                                except ValueError as e:
+                                    self.logger.warning(
+                                        f"Error parsing point {point_id}: {e}"
+                                    )
 
-        if self._nsmap:
-            return self._root.findall(xpath, self._nsmap)
-        else:
-            # Try without namespace prefix
-            xpath_no_ns = xpath.replace("lx:", "")
-            return self._root.findall(xpath_no_ns)
+                if in_faces and tag == "F" and tin_surface is not None:
+                    if elem.text:
+                        parts = elem.text.strip().split()
+                        if len(parts) >= 3:
+                            try:
+                                p1_id = int(parts[0])
+                                p2_id = int(parts[1])
+                                p3_id = int(parts[2])
+                                if all(
+                                    pid in tin_surface.points for pid in [p1_id, p2_id, p3_id]
+                                ):
+                                    triangle = Triangle(
+                                        p1_id=p1_id, p2_id=p2_id, p3_id=p3_id
+                                    )
+                                    tin_surface.add_triangle(triangle)
+                                else:
+                                    self.logger.warning(
+                                        "Triangle references missing points: "
+                                        f"{p1_id}, {p2_id}, {p3_id}"
+                                    )
+                            except ValueError as e:
+                                self.logger.warning(f"Error parsing face: {e}")
+
+                if in_cgpoints and tag == "CgPoint":
+                    content = elem.text
+                    if content:
+                        parts = content.strip().split()
+                        if len(parts) >= 2:
+                            try:
+                                northing = float(parts[0])
+                                easting = float(parts[1])
+                                elevation = float(parts[2]) if len(parts) > 2 else None
+                                cogo_idx += 1
+                                study_point = StudyPoint(
+                                    x=easting,
+                                    y=northing,
+                                    z=elevation,
+                                    name=elem.get("name"),
+                                    id=cogo_idx,
+                                )
+                                cogo_points.append(study_point)
+                            except ValueError as e:
+                                self.logger.warning(f"Error parsing COGO point: {e}")
+
+                if tag == "Pnts":
+                    in_pnts = False
+                if tag == "Faces":
+                    in_faces = False
+                if tag == "Definition":
+                    in_definition = False
+                if tag == "CgPoints":
+                    in_cgpoints = False
+                if tag == "Surface" and in_surface:
+                    in_surface = False
+
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+
+        self._tin_surface = tin_surface
+        self._cogo_points = cogo_points
 
     def parse(self) -> TINSurface:
         """Parse the LandXML file and extract the TIN surface.
@@ -95,137 +187,20 @@ class LandXMLParser:
         """
         self._parse_file()
 
-        # Find surface elements
-        surfaces = self._find_elements(".//lx:Surface")
-        if not surfaces:
+        if self._tin_surface is None:
             raise LandXMLParseError("No Surface elements found in LandXML file")
 
-        # Use the first surface
-        surface_elem = surfaces[0]
-        surface_name = surface_elem.get("name", "Unnamed")
-        self.logger.info(f"Parsing surface: {surface_name}")
-
-        tin_surface = TINSurface(name=surface_name)
-
-        # Parse points
-        self._parse_points(surface_elem, tin_surface)
-
-        # Parse faces
-        self._parse_faces(surface_elem, tin_surface)
-
         self.logger.info(
-            f"Parsed TIN surface: {tin_surface.num_points} points, "
-            f"{tin_surface.num_triangles} triangles"
+            f"Parsed TIN surface: {self._tin_surface.num_points} points, "
+            f"{self._tin_surface.num_triangles} triangles"
         )
 
-        if tin_surface.num_points == 0:
+        if self._tin_surface.num_points == 0:
             raise InvalidTINError("TIN surface has no points")
-        if tin_surface.num_triangles == 0:
+        if self._tin_surface.num_triangles == 0:
             raise InvalidTINError("TIN surface has no triangles")
 
-        return tin_surface
-
-    def _parse_points(
-        self, surface_elem: etree._Element, tin_surface: TINSurface
-    ) -> None:
-        """Parse point elements from the surface.
-
-        Points are in format: "northing easting elevation"
-        """
-        # Find Pnts element
-        if self._nsmap:
-            pnts_elem = surface_elem.find(".//lx:Definition/lx:Pnts", self._nsmap)
-        else:
-            pnts_elem = surface_elem.find(".//Definition/Pnts")
-
-        if pnts_elem is None:
-            raise LandXMLParseError("No Pnts element found in surface")
-
-        # Parse each P element
-        if self._nsmap:
-            p_elements = pnts_elem.findall("lx:P", self._nsmap)
-        else:
-            p_elements = pnts_elem.findall("P")
-
-        for p_elem in p_elements:
-            point_id = p_elem.get("id")
-            if point_id is None:
-                continue
-
-            try:
-                point_id = int(point_id)
-            except ValueError:
-                self.logger.warning(f"Invalid point ID: {point_id}")
-                continue
-
-            content = p_elem.text
-            if content is None:
-                continue
-
-            try:
-                parts = content.strip().split()
-                if len(parts) < 3:
-                    self.logger.warning(f"Point {point_id} has insufficient coordinates")
-                    continue
-
-                # LandXML format: northing easting elevation
-                northing = float(parts[0])
-                easting = float(parts[1])
-                elevation = float(parts[2])
-
-                point = Point3D(x=easting, y=northing, z=elevation, id=point_id)
-                tin_surface.add_point(point)
-
-            except ValueError as e:
-                self.logger.warning(f"Error parsing point {point_id}: {e}")
-
-    def _parse_faces(
-        self, surface_elem: etree._Element, tin_surface: TINSurface
-    ) -> None:
-        """Parse face (triangle) elements from the surface.
-
-        Faces are in format: "p1_id p2_id p3_id"
-        """
-        # Find Faces element
-        if self._nsmap:
-            faces_elem = surface_elem.find(".//lx:Definition/lx:Faces", self._nsmap)
-        else:
-            faces_elem = surface_elem.find(".//Definition/Faces")
-
-        if faces_elem is None:
-            raise LandXMLParseError("No Faces element found in surface")
-
-        # Parse each F element
-        if self._nsmap:
-            f_elements = faces_elem.findall("lx:F", self._nsmap)
-        else:
-            f_elements = faces_elem.findall("F")
-
-        for f_elem in f_elements:
-            content = f_elem.text
-            if content is None:
-                continue
-
-            try:
-                parts = content.strip().split()
-                if len(parts) < 3:
-                    continue
-
-                p1_id = int(parts[0])
-                p2_id = int(parts[1])
-                p3_id = int(parts[2])
-
-                # Verify points exist
-                if all(pid in tin_surface.points for pid in [p1_id, p2_id, p3_id]):
-                    triangle = Triangle(p1_id=p1_id, p2_id=p2_id, p3_id=p3_id)
-                    tin_surface.add_triangle(triangle)
-                else:
-                    self.logger.warning(
-                        f"Triangle references missing points: {p1_id}, {p2_id}, {p3_id}"
-                    )
-
-            except ValueError as e:
-                self.logger.warning(f"Error parsing face: {e}")
+        return self._tin_surface
 
     def get_cogo_points(self) -> list[StudyPoint]:
         """Extract COGO points from the LandXML file.
@@ -237,48 +212,9 @@ class LandXMLParser:
         """
         self._parse_file()
 
-        study_points: list[StudyPoint] = []
-
-        # Find CgPoints element
-        cg_points_elems = self._find_elements(".//lx:CgPoints")
-        if not cg_points_elems:
+        if not self._cogo_points:
             self.logger.warning("No CgPoints element found in LandXML file")
-            return study_points
+            return []
 
-        for cg_points_elem in cg_points_elems:
-            # Parse each CgPoint element
-            if self._nsmap:
-                cg_point_elements = cg_points_elem.findall("lx:CgPoint", self._nsmap)
-            else:
-                cg_point_elements = cg_points_elem.findall("CgPoint")
-
-            for idx, cg_elem in enumerate(cg_point_elements):
-                name = cg_elem.get("name")
-                content = cg_elem.text
-                if content is None:
-                    continue
-
-                try:
-                    parts = content.strip().split()
-                    if len(parts) < 2:
-                        continue
-
-                    # LandXML format: northing easting [elevation]
-                    northing = float(parts[0])
-                    easting = float(parts[1])
-                    elevation = float(parts[2]) if len(parts) > 2 else None
-
-                    study_point = StudyPoint(
-                        x=easting,
-                        y=northing,
-                        z=elevation,
-                        name=name,
-                        id=idx + 1,
-                    )
-                    study_points.append(study_point)
-
-                except ValueError as e:
-                    self.logger.warning(f"Error parsing COGO point: {e}")
-
-        self.logger.info(f"Found {len(study_points)} COGO points")
-        return study_points
+        self.logger.info(f"Found {len(self._cogo_points)} COGO points")
+        return list(self._cogo_points)

@@ -84,3 +84,11 @@ tests/output/*.json
 
 # Performance testing
 perf/
+!perf/
+perf/*
+!perf/README.md
+!perf/findings.md
+!perf/runs.md
+!perf/compare_runs.py
+!perf/flamegraphs/
+!perf/flamegraphs/*.svg
