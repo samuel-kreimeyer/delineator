@@ -20,6 +20,7 @@ class OutputFormat(str, Enum):
     SHAPEFILE = "shapefile"
     GEOJSON = "geojson"
     GEOPACKAGE = "geopackage"
+    DXF = "dxf"
 
 
 class ReportFormat(str, Enum):
@@ -100,6 +101,7 @@ class DelineatorConfig:
             OutputFormat.SHAPEFILE: ".shp",
             OutputFormat.GEOJSON: ".geojson",
             OutputFormat.GEOPACKAGE: ".gpkg",
+            OutputFormat.DXF: ".dxf",
         }
         return self.output_dir / f"watersheds{ext_map[self.output_format]}"
 

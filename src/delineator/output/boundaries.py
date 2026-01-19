@@ -8,8 +8,9 @@ import numpy as np
 import rasterio
 from rasterio.features import shapes
 import geopandas as gpd
-from shapely.geometry import shape
+from shapely.geometry import shape, Polygon, MultiPolygon
 from whitebox import WhiteboxTools
+import ezdxf
 
 from delineator.config import OutputFormat
 from delineator.geometry.tin import StudyPoint
@@ -356,7 +357,98 @@ class WatershedBoundaryGenerator:
             gdf.to_file(output_path, driver="GeoJSON")
         elif output_format == OutputFormat.GEOPACKAGE:
             gdf.to_file(output_path, driver="GPKG")
+        elif output_format == OutputFormat.DXF:
+            self._save_dxf(gdf, output_path)
         else:
             raise OutputError(f"Unsupported output format: {output_format}")
 
         self.logger.info(f"Boundaries saved to: {output_path}")
+
+    def _save_dxf(self, gdf: gpd.GeoDataFrame, output_path: Path) -> None:
+        """Save GeoDataFrame as DXF file with LWPOLYLINE entities."""
+        doc = ezdxf.new("R2010")
+        msp = doc.modelspace()
+
+        # Register XDATA application ID
+        doc.appids.add("DELINEATOR")
+
+        # Create layers
+        doc.layers.add("WATERSHEDS", color=7)  # White/default
+        doc.layers.add("WATERSHEDS_HOLES", color=8)  # Gray
+
+        # Color palette for watersheds (AutoCAD color indices)
+        colors = [1, 2, 3, 4, 5, 6, 30, 40, 50, 60, 70, 80, 90, 100]
+
+        for idx, row in gdf.iterrows():
+            watershed_id = int(row["watershed_id"])
+            point_name = row.get("point_name", f"Point_{watershed_id}")
+            area_sqft = row.get("area_sqft", 0.0)
+            area_acres = row.get("area_acres", 0.0)
+            area_sqmi = row.get("area_sqmi", 0.0)
+            elev_min = row.get("elev_min")
+            elev_max = row.get("elev_max")
+            elev_mean = row.get("elev_mean")
+
+            # Select color based on watershed_id
+            color = colors[watershed_id % len(colors)]
+
+            geom = row.geometry
+            if geom is None:
+                continue
+
+            # Handle both Polygon and MultiPolygon
+            polygons = []
+            if isinstance(geom, Polygon):
+                polygons = [geom]
+            elif isinstance(geom, MultiPolygon):
+                polygons = list(geom.geoms)
+
+            for polygon in polygons:
+                # Add exterior ring as LWPOLYLINE
+                exterior_coords = list(polygon.exterior.coords)
+                if len(exterior_coords) >= 3:
+                    # Remove closing point if present (ezdxf handles closing)
+                    if exterior_coords[0] == exterior_coords[-1]:
+                        exterior_coords = exterior_coords[:-1]
+
+                    lwpoly = msp.add_lwpolyline(
+                        exterior_coords,
+                        dxfattribs={
+                            "layer": "WATERSHEDS",
+                            "color": color,
+                        },
+                        close=True,
+                    )
+
+                    # Attach XDATA
+                    lwpoly.set_xdata(
+                        "DELINEATOR",
+                        [
+                            (1000, f"watershed_id={watershed_id}"),
+                            (1000, f"point_name={point_name}"),
+                            (1040, area_sqft if area_sqft else 0.0),
+                            (1040, area_acres if area_acres else 0.0),
+                            (1040, area_sqmi if area_sqmi else 0.0),
+                            (1040, elev_min if elev_min is not None else 0.0),
+                            (1040, elev_max if elev_max is not None else 0.0),
+                            (1040, elev_mean if elev_mean is not None else 0.0),
+                        ],
+                    )
+
+                # Add interior rings (holes) as separate polylines
+                for interior in polygon.interiors:
+                    interior_coords = list(interior.coords)
+                    if len(interior_coords) >= 3:
+                        if interior_coords[0] == interior_coords[-1]:
+                            interior_coords = interior_coords[:-1]
+
+                        msp.add_lwpolyline(
+                            interior_coords,
+                            dxfattribs={
+                                "layer": "WATERSHEDS_HOLES",
+                                "color": 8,  # Gray
+                            },
+                            close=True,
+                        )
+
+        doc.saveas(output_path)
