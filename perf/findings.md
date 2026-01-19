@@ -8,6 +8,8 @@
   - Lowers memory usage and reduces parsing overhead for large LandXML files.
 - src/delineator/geometry/rasterize.py: chunked interpolation to reduce peak memory while keeping output identical.
   - Uses windowed writes with the same interpolation grid to avoid output drift.
+- src/delineator/geometry/tin.py: cached point/triangle arrays to avoid repeated sorting.
+  - Recomputed only when points/triangles change.
 
 ## Flamegraph highlights (tests/data/080724_Drainage.xml)
 - perf/flamegraphs/drainage.svg shows the biggest CPU share in TIN rasterization setup:

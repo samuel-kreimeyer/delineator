@@ -51,16 +51,23 @@ class TINSurface:
     name: str
     points: dict[int, Point3D] = field(default_factory=dict)
     triangles: list[Triangle] = field(default_factory=list)
+    _point_arrays: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = field(
+        default=None, init=False, repr=False
+    )
+    _triangle_array: Optional[np.ndarray] = field(default=None, init=False, repr=False)
 
     def add_point(self, point: Point3D) -> None:
         """Add a point to the surface."""
         if point.id is None:
             point.id = len(self.points) + 1
         self.points[point.id] = point
+        self._point_arrays = None
+        self._triangle_array = None
 
     def add_triangle(self, triangle: Triangle) -> None:
         """Add a triangle to the surface."""
         self.triangles.append(triangle)
+        self._triangle_array = None
 
     @property
     def num_points(self) -> int:
@@ -94,27 +101,31 @@ class TINSurface:
 
     def get_point_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Get numpy arrays of x, y, z coordinates."""
-        points_list = sorted(self.points.values(), key=lambda p: p.id)
-        x = np.array([p.x for p in points_list])
-        y = np.array([p.y for p in points_list])
-        z = np.array([p.z for p in points_list])
-        return x, y, z
+        if self._point_arrays is None:
+            points_list = sorted(self.points.values(), key=lambda p: p.id)
+            x = np.array([p.x for p in points_list])
+            y = np.array([p.y for p in points_list])
+            z = np.array([p.z for p in points_list])
+            self._point_arrays = (x, y, z)
+        return self._point_arrays
 
     def get_triangle_array(self) -> np.ndarray:
         """Get numpy array of triangle vertex indices (0-based)."""
-        # Create a mapping from point IDs to 0-based indices
-        point_ids = sorted(self.points.keys())
-        id_to_index = {pid: idx for idx, pid in enumerate(point_ids)}
+        if self._triangle_array is None:
+            # Create a mapping from point IDs to 0-based indices
+            point_ids = sorted(self.points.keys())
+            id_to_index = {pid: idx for idx, pid in enumerate(point_ids)}
 
-        triangles = np.array([
-            [
-                id_to_index[t.p1_id],
-                id_to_index[t.p2_id],
-                id_to_index[t.p3_id],
-            ]
-            for t in self.triangles
-        ])
-        return triangles
+            triangles = np.array([
+                [
+                    id_to_index[t.p1_id],
+                    id_to_index[t.p2_id],
+                    id_to_index[t.p3_id],
+                ]
+                for t in self.triangles
+            ])
+            self._triangle_array = triangles
+        return self._triangle_array
 
     def compute_average_edge_length(self) -> float:
         """Compute the average edge length of all triangles."""
