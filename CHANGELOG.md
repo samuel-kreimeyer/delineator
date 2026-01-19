@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Color-coded polygons based on watershed ID for visual distinction
   - Uses ezdxf library with DXF R2010 format
 
+- Longest flow path analysis for each watershed
+  - `lfp_length`: Distance (ft) of the most hydrologically distant flow path to the pour point
+  - `lfp_slope`: Average slope (ft/ft) along the longest flow path
+  - Uses WhiteboxTools `longest_flowpath` to trace the main channel
+  - Slope computed as length-weighted average of segment slopes along the path
+  - Available in all output formats (Shapefile, GeoJSON, GeoPackage, DXF)
+
 ## [0.1.0] - 2026-01-18
 
 ### Added

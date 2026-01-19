@@ -8,9 +8,10 @@ import numpy as np
 import rasterio
 from rasterio.features import shapes
 import geopandas as gpd
-from shapely.geometry import shape, Polygon, MultiPolygon
+from shapely.geometry import shape, Polygon, MultiPolygon, LineString
 from whitebox import WhiteboxTools
 import ezdxf
+from rasterio.transform import rowcol
 
 from delineator.config import OutputFormat
 from delineator.geometry.tin import StudyPoint
@@ -75,6 +76,7 @@ class WatershedBoundaryGenerator:
                 flow_dir_path=flow_dir_path,
                 flow_acc_path=flow_acc_path,
                 pour_points_path=pour_points_path,
+                dem_path=dem_path,
                 dem_data=dem_data,
                 dem_nodata=dem_nodata,
                 cell_size=cell_size,
@@ -86,6 +88,7 @@ class WatershedBoundaryGenerator:
             # Exclusive mode: use the combined watershed raster
             gdf = self._generate_exclusive(
                 watershed_raster_path=watershed_raster_path,
+                dem_path=dem_path,
                 dem_data=dem_data,
                 dem_nodata=dem_nodata,
                 cell_size=cell_size,
@@ -100,6 +103,7 @@ class WatershedBoundaryGenerator:
     def _generate_exclusive(
         self,
         watershed_raster_path: Path,
+        dem_path: Path,
         dem_data: np.ndarray,
         dem_nodata: Optional[float],
         cell_size: float,
@@ -154,6 +158,30 @@ class WatershedBoundaryGenerator:
         # Compute statistics (imperial units)
         self._compute_statistics(gdf, watershed_data, dem_data, dem_nodata, cell_size)
 
+        # Compute longest flow path statistics
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lfp_stats = self._compute_longest_flowpath_stats(
+                dem_path=dem_path,
+                basins_path=watershed_raster_path,
+                work_dir=Path(tmpdir),
+            )
+
+        # Add flow path columns
+        lfp_lengths = []
+        lfp_slopes = []
+        for _, row in gdf.iterrows():
+            ws_id = int(row["watershed_id"])
+            if ws_id in lfp_stats:
+                length, slope = lfp_stats[ws_id]
+                lfp_lengths.append(length)
+                lfp_slopes.append(slope)
+            else:
+                lfp_lengths.append(None)
+                lfp_slopes.append(None)
+
+        gdf["lfp_length"] = lfp_lengths
+        gdf["lfp_slope"] = lfp_slopes
+
         return gdf
 
     def _generate_cumulative(
@@ -161,6 +189,7 @@ class WatershedBoundaryGenerator:
         flow_dir_path: Path,
         flow_acc_path: Optional[Path],
         pour_points_path: Path,
+        dem_path: Path,
         dem_data: np.ndarray,
         dem_nodata: Optional[float],
         cell_size: float,
@@ -186,6 +215,8 @@ class WatershedBoundaryGenerator:
         max_elevs = []
         mean_elevs = []
         point_names = []
+        lfp_lengths = []
+        lfp_slopes = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
@@ -249,6 +280,19 @@ class WatershedBoundaryGenerator:
                 else:
                     min_elev = max_elev = mean_elev = None
 
+                # Compute longest flow path stats for this watershed
+                lfp_stats = self._compute_longest_flowpath_stats(
+                    dem_path=dem_path,
+                    basins_path=ws_output,
+                    work_dir=tmpdir,
+                )
+                # Get stats for this watershed (ID will be 1 in single-watershed raster)
+                if lfp_stats:
+                    # The single watershed will have value from the raster
+                    lfp_length, lfp_slope = next(iter(lfp_stats.values()), (None, None))
+                else:
+                    lfp_length, lfp_slope = None, None
+
                 # Vectorize
                 for geom, value in shapes(ws_data.astype(np.int32), mask=ws_mask, transform=ws_transform):
                     polygon = shape(geom)
@@ -262,6 +306,8 @@ class WatershedBoundaryGenerator:
                         min_elevs.append(min_elev)
                         max_elevs.append(max_elev)
                         mean_elevs.append(mean_elev)
+                        lfp_lengths.append(lfp_length)
+                        lfp_slopes.append(lfp_slope)
                         break  # Only need one polygon per watershed
 
         if not polygons:
@@ -279,6 +325,8 @@ class WatershedBoundaryGenerator:
             "elev_min": min_elevs,
             "elev_max": max_elevs,
             "elev_mean": mean_elevs,
+            "lfp_length": lfp_lengths,
+            "lfp_slope": lfp_slopes,
             "geometry": polygons,
         }, crs=crs)
 
@@ -342,6 +390,133 @@ class WatershedBoundaryGenerator:
         gdf["elev_max"] = max_elevs
         gdf["elev_mean"] = mean_elevs
 
+    def _compute_longest_flowpath_stats(
+        self,
+        dem_path: Path,
+        basins_path: Path,
+        work_dir: Path,
+    ) -> dict[int, tuple[float, float]]:
+        """Compute longest flow path statistics for each watershed.
+
+        Uses WhiteboxTools longest_flowpath to find the most hydrologically
+        distant path to the pour point, then computes its length and average slope.
+
+        Args:
+            dem_path: Path to DEM raster.
+            basins_path: Path to watershed/basins raster.
+            work_dir: Working directory for temporary outputs.
+
+        Returns:
+            Dict mapping watershed_id to (path_length_ft, avg_slope_ft_per_ft).
+        """
+        self.logger.info("Computing longest flow path statistics")
+
+        lfp_output = work_dir / "longest_flowpaths.shp"
+
+        try:
+            result = self.wbt.longest_flowpath(
+                dem=str(dem_path.resolve()),
+                basins=str(basins_path.resolve()),
+                output=str(lfp_output.resolve()),
+            )
+            if result != 0 or not lfp_output.exists():
+                self.logger.warning("Failed to compute longest flowpaths")
+                return {}
+        except Exception as e:
+            self.logger.warning(f"Error computing longest flowpaths: {e}")
+            return {}
+
+        # Read the flowpath vectors
+        try:
+            lfp_gdf = gpd.read_file(lfp_output)
+        except Exception as e:
+            self.logger.warning(f"Error reading longest flowpath output: {e}")
+            return {}
+
+        if lfp_gdf.empty:
+            return {}
+
+        stats = {}
+
+        with rasterio.open(dem_path) as dem_src:
+            dem_data = dem_src.read(1)
+            dem_nodata = dem_src.nodata
+            transform = dem_src.transform
+
+            for idx, row in lfp_gdf.iterrows():
+                # Get watershed ID - WhiteboxTools uses 'BASIN' field
+                ws_id = row.get("BASIN", row.get("basin", idx + 1))
+
+                geom = row.geometry
+                if geom is None or geom.is_empty:
+                    continue
+
+                # Handle both LineString and MultiLineString
+                if hasattr(geom, "geoms"):
+                    # MultiLineString - take the longest one
+                    lines = list(geom.geoms)
+                    geom = max(lines, key=lambda g: g.length)
+
+                if not isinstance(geom, LineString):
+                    continue
+
+                # Calculate path length (in CRS units, assumed feet)
+                path_length = geom.length
+
+                if path_length <= 0:
+                    continue
+
+                # Sample elevations along the path at regular intervals
+                # Use more sample points for longer paths
+                num_samples = max(10, min(100, int(path_length / 50)))
+                sample_distances = np.linspace(0, path_length, num_samples)
+
+                elevations = []
+                for dist in sample_distances:
+                    point = geom.interpolate(dist)
+                    x, y = point.x, point.y
+
+                    # Convert to raster indices
+                    try:
+                        r, c = rowcol(transform, x, y)
+                        if 0 <= r < dem_data.shape[0] and 0 <= c < dem_data.shape[1]:
+                            elev = dem_data[r, c]
+                            if dem_nodata is None or elev != dem_nodata:
+                                elevations.append((dist, float(elev)))
+                    except (IndexError, ValueError):
+                        continue
+
+                if len(elevations) < 2:
+                    continue
+
+                # Compute average slope along the path
+                # Method: Average of segment slopes (weighted by segment length)
+                total_weighted_slope = 0.0
+                total_weight = 0.0
+
+                for i in range(1, len(elevations)):
+                    dist_prev, elev_prev = elevations[i - 1]
+                    dist_curr, elev_curr = elevations[i]
+
+                    segment_length = dist_curr - dist_prev
+                    if segment_length > 0:
+                        segment_slope = abs(elev_prev - elev_curr) / segment_length
+                        total_weighted_slope += segment_slope * segment_length
+                        total_weight += segment_length
+
+                if total_weight > 0:
+                    avg_slope = total_weighted_slope / total_weight
+                else:
+                    # Fallback: overall slope
+                    elev_start = elevations[0][1]
+                    elev_end = elevations[-1][1]
+                    avg_slope = abs(elev_start - elev_end) / path_length
+
+                stats[int(ws_id)] = (path_length, avg_slope)
+
+        self.logger.info(f"Computed flow path stats for {len(stats)} watersheds")
+        return stats
+
     def _save_output(
         self,
         gdf: gpd.GeoDataFrame,
@@ -388,6 +563,8 @@ class WatershedBoundaryGenerator:
             elev_min = row.get("elev_min")
             elev_max = row.get("elev_max")
             elev_mean = row.get("elev_mean")
+            lfp_length = row.get("lfp_length")
+            lfp_slope = row.get("lfp_slope")
 
             # Select color based on watershed_id
             color = colors[watershed_id % len(colors)]
@@ -432,6 +609,8 @@ class WatershedBoundaryGenerator:
                             (1040, elev_min if elev_min is not None else 0.0),
                             (1040, elev_max if elev_max is not None else 0.0),
                             (1040, elev_mean if elev_mean is not None else 0.0),
+                            (1040, lfp_length if lfp_length is not None else 0.0),
+                            (1040, lfp_slope if lfp_slope is not None else 0.0),
                         ],
                     )
 
