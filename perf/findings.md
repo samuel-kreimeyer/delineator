@@ -6,6 +6,8 @@
   - Expected to improve exclusive-mode performance when many watersheds exist.
 - src/delineator/parsers/landxml.py: switched to iterparse streaming to avoid building a full XML tree.
   - Lowers memory usage and reduces parsing overhead for large LandXML files.
+- src/delineator/geometry/rasterize.py: chunked interpolation to reduce peak memory while keeping output identical.
+  - Uses windowed writes with the same interpolation grid to avoid output drift.
 
 ## Flamegraph highlights (tests/data/080724_Drainage.xml)
 - perf/flamegraphs/drainage.svg shows the biggest CPU share in TIN rasterization setup:

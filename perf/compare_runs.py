@@ -14,6 +14,7 @@ from typing import Iterable
 
 import numpy as np
 import rasterio
+import geopandas as gpd
 
 
 def _hash_file(path: Path) -> str:
@@ -82,6 +83,54 @@ def _compare_bytes(reference: Path, candidate: Path) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _round_array(values: np.ndarray) -> np.ndarray:
+    if values.dtype.kind == "f":
+        return np.round(values.astype(float), 2)
+    return values
+
+
+def _compare_shapefile_attrs(reference: Path, candidate: Path) -> tuple[bool, str]:
+    ref_shp = reference.with_suffix(".shp")
+    cand_shp = candidate.with_suffix(".shp")
+    if not ref_shp.exists() or not cand_shp.exists():
+        return False, "missing shapefile pair"
+
+    try:
+        ref = gpd.read_file(ref_shp)
+        cur = gpd.read_file(cand_shp)
+    except Exception as exc:
+        return False, f"shapefile read error: {exc}"
+
+    ref_cols = [c for c in ref.columns if c != "geometry"]
+    cur_cols = [c for c in cur.columns if c != "geometry"]
+    if not set(ref_cols).issubset(set(cur_cols)):
+        return False, "missing reference columns"
+    extra_cols = [c for c in cur_cols if c not in ref_cols]
+
+    sort_col = None
+    for candidate_col in ("watershed_", "watershed_id", "id", "name"):
+        if candidate_col in ref.columns:
+            sort_col = candidate_col
+            break
+
+    if sort_col:
+        ref = ref.sort_values(sort_col).reset_index(drop=True)
+        cur = cur.sort_values(sort_col).reset_index(drop=True)
+
+    if len(ref) != len(cur):
+        return False, "row count differs"
+
+    for col in ref_cols:
+        ref_vals = _round_array(ref[col].to_numpy())
+        cur_vals = _round_array(cur[col].to_numpy())
+        if not np.array_equal(ref_vals, cur_vals):
+            return False, f"attribute differs: {col}"
+
+    if extra_cols:
+        return True, f"ok (extra columns: {', '.join(extra_cols)})"
+    return True, "ok"
+
+
 def _iter_reference_files(reference_dir: Path) -> Iterable[Path]:
     for path in sorted(reference_dir.iterdir()):
         if path.is_file():
@@ -147,6 +196,8 @@ def main() -> int:
             ok, msg = _compare_raster(reference, candidate)
         elif ext == ".json":
             ok, msg = _compare_json(reference, candidate)
+        elif ext == ".dbf":
+            ok, msg = _compare_shapefile_attrs(reference, candidate)
         else:
             ok, msg = _compare_bytes(reference, candidate)
 

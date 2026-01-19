@@ -57,6 +57,7 @@ class TINRasterizer:
         output_path: Path,
         cell_size: Optional[float] = None,
         nodata: float = -9999.0,
+        chunk_rows: int = 256,
     ) -> None:
         """Rasterize the TIN surface to a GeoTIFF.
 
@@ -64,6 +65,7 @@ class TINRasterizer:
             output_path: Path for the output GeoTIFF.
             cell_size: Raster cell size. If None, auto-computed.
             nodata: NoData value for the raster.
+            chunk_rows: Number of rows to interpolate per chunk.
         """
         if cell_size is None:
             cell_size = self.compute_cell_size()
@@ -86,17 +88,6 @@ class TINRasterizer:
         # Create coordinate grids
         x_coords = np.linspace(min_x + cell_size / 2, max_x - cell_size / 2, width)
         y_coords = np.linspace(max_y - cell_size / 2, min_y + cell_size / 2, height)
-        xx, yy = np.meshgrid(x_coords, y_coords)
-
-        # Interpolate elevation values
-        self.logger.info("Interpolating elevation values...")
-        zz = self.interpolator(xx, yy)
-
-        # Handle masked values (outside triangulation)
-        if hasattr(zz, "mask"):
-            zz = zz.filled(nodata)
-        else:
-            zz = np.where(np.isnan(zz), nodata, zz)
 
         # Create the transform
         transform = from_bounds(min_x, min_y, max_x, max_y, width, height)
@@ -118,11 +109,32 @@ class TINRasterizer:
             height=height,
             width=width,
             count=1,
-            dtype=zz.dtype,
+            dtype=np.float64,
             crs=crs,
             transform=transform,
             nodata=nodata,
         ) as dst:
-            dst.write(zz, 1)
+            # Interpolate in row chunks to reduce peak memory usage.
+            self.logger.info("Interpolating elevation values...")
+            chunk_rows = max(1, chunk_rows)
+            for row_start in range(0, height, chunk_rows):
+                row_end = min(row_start + chunk_rows, height)
+                y_slice = y_coords[row_start:row_end]
+                xx, yy = np.meshgrid(x_coords, y_slice)
+                zz = self.interpolator(xx, yy)
+
+                # Handle masked values (outside triangulation)
+                if hasattr(zz, "mask"):
+                    zz = zz.filled(nodata)
+                else:
+                    zz = np.where(np.isnan(zz), nodata, zz)
+
+                window = rasterio.windows.Window(
+                    col_off=0,
+                    row_off=row_start,
+                    width=width,
+                    height=row_end - row_start,
+                )
+                dst.write(zz.astype(np.float64, copy=False), 1, window=window)
 
         self.logger.info(f"Raster created: {output_path}")

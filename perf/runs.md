@@ -31,6 +31,9 @@
 - Timing: ~76s wall time (single run, prior to iterparse change)
 - Timing (iterparse): real 86.90s, user 86.54s, sys 3.71s (includes full run; not directly comparable to earlier rough timing)
 - Timing (tree parse baseline, same command): real 96.56s, user 93.76s, sys 5.65s
+- Chunked rasterization validation:
+  - Command: `perf/compare_runs.py --input tests/data/080724_Drainage.xml --output-dir perf/runs/drainage_chunk --reference-dir tests/output --use-cogo-points --cell-size 1.0 --snap-distance 10.0 --keep-intermediates`
+  - Result: all outputs match reference with 2-decimal float tolerance; shapefile DBF includes extra columns `lfp_length`, `lfp_slope` not present in reference.
 - Output compare:
   - `perf/compare_runs.py` vs `tests/output` reported raster profile differences and shapefile/report diffs; likely due to dependency/tooling differences (GDAL/Whitebox/pyogrio versions).
 - Notes:
