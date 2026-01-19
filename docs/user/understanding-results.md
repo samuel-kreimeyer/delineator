@@ -14,7 +14,7 @@ output/
 ├── flow_acc.tif         # Flow accumulation (if --keep-intermediates)
 ├── watershed.tif        # Watershed raster (if --keep-intermediates)
 ├── pour_points.shp      # Snapped pour points
-├── watersheds.shp       # Watershed boundaries (or .geojson/.gpkg)
+├── watersheds.shp       # Watershed boundaries (or .geojson/.gpkg/.dxf)
 └── report.json          # Statistics report (or .csv/.txt)
 ```
 
@@ -34,6 +34,8 @@ The `watersheds.shp` (or equivalent) file contains polygon features representing
 | `elev_min` | Minimum elevation in the watershed (ft) |
 | `elev_max` | Maximum elevation in the watershed (ft) |
 | `elev_mean` | Mean elevation in the watershed (ft) |
+| `lfp_length` | Longest flow path length (ft) - distance from the most hydrologically distant point to the pour point |
+| `lfp_slope` | Average slope along the longest flow path (ft/ft) |
 
 ### Cumulative vs Exclusive Watersheds
 
@@ -54,6 +56,35 @@ Pour Point A (upstream)     Pour Point B (downstream)
   [====]                    [    ======]
   Watershed A               Watershed B (excludes A)
 ```
+
+### Longest Flow Path
+
+The longest flow path (LFP) represents the main drainage channel from the most hydrologically distant point in the watershed to the pour point. This is the path water would travel from the farthest edge of the watershed.
+
+**Applications:**
+- **Time of concentration (Tc)** - Used in the Kirpich, SCS, and other formulas to estimate how long it takes runoff to reach the outlet
+- **Rational method** - Peak discharge calculations require Tc
+- **Drainage design** - Sizing culverts, channels, and detention basins
+- **Flood routing** - Understanding travel times through a watershed
+
+The `lfp_slope` is computed as a length-weighted average of slopes along the path, which better represents the effective slope than a simple endpoint calculation.
+
+### DXF Output Format
+
+When using `--output-format dxf`, watersheds are exported as AutoCAD DXF files for direct import into CAD software. This is useful for civil engineering workflows where watershed boundaries need to be incorporated into site plans.
+
+**Structure:**
+- **WATERSHEDS layer** - Closed LWPOLYLINE entities for watershed boundaries, color-coded by watershed ID
+- **WATERSHEDS_HOLES layer** - Interior holes (if any) in gray
+
+**Attributes via XDATA:**
+All watershed attributes are stored as extended data (XDATA) on each polyline under the "DELINEATOR" application ID:
+- watershed_id, point_name (as strings)
+- area_sqft, area_acres, area_sqmi (as reals)
+- elev_min, elev_max, elev_mean (as reals)
+- lfp_length, lfp_slope (as reals)
+
+**Compatible software:** AutoCAD, Civil 3D, MicroStation, BricsCAD, LibreCAD, QGIS
 
 ## Pour Points
 

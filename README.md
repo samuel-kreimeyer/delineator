@@ -13,7 +13,8 @@ Delineator is a Python CLI tool that automates the process of delineating waters
 - Hydrologically condition DEMs (breach/fill depressions)
 - Compute D8 flow direction and accumulation
 - Delineate cumulative or exclusive watersheds
-- Generate vector boundaries (Shapefile, GeoJSON, GeoPackage)
+- Generate vector boundaries (Shapefile, GeoJSON, GeoPackage, DXF)
+- Compute longest flow path length and slope for each watershed
 - Produce statistical reports (JSON, CSV, text)
 
 ## Installation
@@ -64,7 +65,7 @@ delineator input.xml -o output/ \
 | `--cell-size N` | Raster cell size in map units | Auto |
 | `--snap-distance N` | Pour point snap distance | 2x cell size |
 | `--depression-method` | `fill`, `breach`, or `breach-least-cost` | `breach` |
-| `--output-format` | `shapefile`, `geojson`, or `geopackage` | `shapefile` |
+| `--output-format` | `shapefile`, `geojson`, `geopackage`, or `dxf` | `shapefile` |
 | `--report-format` | `json`, `csv`, `text`, or `all` | `json` |
 | `--exclusive` | Non-overlapping watersheds | Cumulative |
 | `--keep-intermediates` | Keep intermediate rasters | No |
@@ -85,6 +86,7 @@ delineator input.xml -o output/ \
 Each watershed includes:
 - Area in square feet, acres, and square miles
 - Minimum, maximum, and mean elevation (feet)
+- Longest flow path length (feet) and average slope (ft/ft)
 
 ## Processing Pipeline
 
@@ -143,6 +145,7 @@ Increase snap distance when:
 - shapely - Geometry operations
 - pyproj - Coordinate systems
 - lxml - XML parsing
+- ezdxf - DXF file output
 
 ## License
 
