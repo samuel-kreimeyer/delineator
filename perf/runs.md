@@ -34,6 +34,9 @@
 - Chunked rasterization validation:
   - Command: `perf/compare_runs.py --input tests/data/080724_Drainage.xml --output-dir perf/runs/drainage_chunk --reference-dir tests/output --use-cogo-points --cell-size 1.0 --snap-distance 10.0 --keep-intermediates`
   - Result: all outputs match reference with 2-decimal float tolerance; shapefile DBF includes extra columns `lfp_length`, `lfp_slope` not present in reference.
+- Chunked rasterization A/B timing (same command, `--cell-size 1.0 --snap-distance 10.0`):
+  - Non-chunked (legacy): real 156.66s, user 157.75s, sys 11.44s
+  - Chunked (current): real 154.69s, user 156.53s, sys 10.98s
 - Output compare:
   - `perf/compare_runs.py` vs `tests/output` reported raster profile differences and shapefile/report diffs; likely due to dependency/tooling differences (GDAL/Whitebox/pyogrio versions).
 - Notes:
