@@ -1,4 +1,5 @@
 LICENSE
+README.md
 pyproject.toml
 src/delineator/__init__.py
 src/delineator/__main__.py

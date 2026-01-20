@@ -70,6 +70,7 @@ class ReportGenerator:
             "elev_min",
             "elev_max",
             "elev_mean",
+            "lfp_length",
         ]
         available_columns = [c for c in columns if c in watersheds_gdf.columns]
 
@@ -121,6 +122,11 @@ class ReportGenerator:
                 f"Watershed {ws['watershed_id']}: {ws['point_name']}",
                 f"  Area: {ws['area_acres']:.2f} acres ({ws['area_sqmi']:.4f} mi²)",
                 f"  Elevation: min={ws['elev_min_ft']:.2f} ft, max={ws['elev_max_ft']:.2f} ft, mean={ws['elev_mean_ft']:.2f} ft",
+                (
+                    f"  Hydraulic distance (longest flow path): {ws['hydraulic_distance_ft']:.2f} ft"
+                    if ws.get("hydraulic_distance_ft") is not None
+                    else "  Hydraulic distance (longest flow path): N/A"
+                ),
                 "",
             ])
 
@@ -147,6 +153,8 @@ class ReportGenerator:
                 "elev_min_ft": float(row.get("elev_min", 0)) if row.get("elev_min") is not None else None,
                 "elev_max_ft": float(row.get("elev_max", 0)) if row.get("elev_max") is not None else None,
                 "elev_mean_ft": float(row.get("elev_mean", 0)) if row.get("elev_mean") is not None else None,
+                # Longest flow path (hydraulic distance) in feet (if available)
+                "hydraulic_distance_ft": float(row.get("lfp_length")) if row.get("lfp_length") is not None else None,
             }
             watersheds.append(ws_data)
 
