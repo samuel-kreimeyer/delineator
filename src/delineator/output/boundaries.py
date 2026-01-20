@@ -164,23 +164,37 @@ class WatershedBoundaryGenerator:
                 dem_path=dem_path,
                 basins_path=watershed_raster_path,
                 work_dir=Path(tmpdir),
+                flow_dir_path=None,  # Not available in exclusive mode
+                pour_point_coords=None,
             )
 
         # Add flow path columns
         lfp_lengths = []
         lfp_slopes = []
+        lfp_elev_starts = []
+        lfp_elev_ends = []
+        lfp_elev_drops = []
         for _, row in gdf.iterrows():
             ws_id = int(row["watershed_id"])
             if ws_id in lfp_stats:
-                length, slope = lfp_stats[ws_id]
+                length, slope, elev_start, elev_end, elev_drop = lfp_stats[ws_id]
                 lfp_lengths.append(length)
                 lfp_slopes.append(slope)
+                lfp_elev_starts.append(elev_start)
+                lfp_elev_ends.append(elev_end)
+                lfp_elev_drops.append(elev_drop)
             else:
                 lfp_lengths.append(None)
                 lfp_slopes.append(None)
+                lfp_elev_starts.append(None)
+                lfp_elev_ends.append(None)
+                lfp_elev_drops.append(None)
 
         gdf["lfp_length"] = lfp_lengths
         gdf["lfp_slope"] = lfp_slopes
+        gdf["lfp_elev_start"] = lfp_elev_starts
+        gdf["lfp_elev_end"] = lfp_elev_ends
+        gdf["lfp_elev_drop"] = lfp_elev_drops
 
         return gdf
 
@@ -217,6 +231,9 @@ class WatershedBoundaryGenerator:
         point_names = []
         lfp_lengths = []
         lfp_slopes = []
+        lfp_elev_starts = []
+        lfp_elev_ends = []
+        lfp_elev_drops = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
@@ -224,13 +241,14 @@ class WatershedBoundaryGenerator:
             for idx, row in pour_points.iterrows():
                 pt_id = row['id']
                 pt_name = row.get('name', f"Point_{pt_id}")
+                pt_geom = row.geometry
 
                 self.logger.info(f"  Processing watershed for point {pt_id} ({pt_name})")
 
                 # Create single-point shapefile
                 single_pt_path = tmpdir / f"pt_{pt_id}.shp"
                 single_gdf = gpd.GeoDataFrame(
-                    {"id": [pt_id], "name": [pt_name], "geometry": [row.geometry]},
+                    {"id": [pt_id], "name": [pt_name], "geometry": [pt_geom]},
                     crs=pour_points.crs,
                 )
                 single_gdf.to_file(single_pt_path)
@@ -281,17 +299,22 @@ class WatershedBoundaryGenerator:
                     min_elev = max_elev = mean_elev = None
 
                 # Compute longest flow path stats for this watershed
+                # Pass the pour point coordinates for better accuracy
+                pour_coords = (pt_geom.x, pt_geom.y) if pt_geom else None
                 lfp_stats = self._compute_longest_flowpath_stats(
                     dem_path=dem_path,
                     basins_path=ws_output,
                     work_dir=tmpdir,
+                    flow_dir_path=flow_dir_path,
+                    pour_point_coords=pour_coords,
                 )
                 # Get stats for this watershed (ID will be 1 in single-watershed raster)
                 if lfp_stats:
                     # The single watershed will have value from the raster
-                    lfp_length, lfp_slope = next(iter(lfp_stats.values()), (None, None))
+                    stats_tuple = next(iter(lfp_stats.values()), (None, None, None, None, None))
+                    lfp_length, lfp_slope, lfp_elev_start, lfp_elev_end, lfp_elev_drop = stats_tuple
                 else:
-                    lfp_length, lfp_slope = None, None
+                    lfp_length, lfp_slope, lfp_elev_start, lfp_elev_end, lfp_elev_drop = None, None, None, None, None
 
                 # Vectorize
                 for geom, value in shapes(ws_data.astype(np.int32), mask=ws_mask, transform=ws_transform):
@@ -308,6 +331,9 @@ class WatershedBoundaryGenerator:
                         mean_elevs.append(mean_elev)
                         lfp_lengths.append(lfp_length)
                         lfp_slopes.append(lfp_slope)
+                        lfp_elev_starts.append(lfp_elev_start)
+                        lfp_elev_ends.append(lfp_elev_end)
+                        lfp_elev_drops.append(lfp_elev_drop)
                         break  # Only need one polygon per watershed
 
         if not polygons:
@@ -327,6 +353,9 @@ class WatershedBoundaryGenerator:
             "elev_mean": mean_elevs,
             "lfp_length": lfp_lengths,
             "lfp_slope": lfp_slopes,
+            "lfp_elev_start": lfp_elev_starts,
+            "lfp_elev_end": lfp_elev_ends,
+            "lfp_elev_drop": lfp_elev_drops,
             "geometry": polygons,
         }, crs=crs)
 
@@ -395,127 +424,277 @@ class WatershedBoundaryGenerator:
         dem_path: Path,
         basins_path: Path,
         work_dir: Path,
-    ) -> dict[int, tuple[float, float]]:
+        flow_dir_path: Optional[Path] = None,
+        pour_point_coords: Optional[tuple[float, float]] = None,
+    ) -> dict[int, tuple[float, float, float, float, float]]:
         """Compute longest flow path statistics for each watershed.
 
-        Uses WhiteboxTools longest_flowpath to find the most hydrologically
-        distant path to the pour point, then computes its length and average slope.
+        Walks the D8 flow direction grid backwards from the pour point to find
+        the furthest cell (longest hydraulic path). This represents the maximum
+        distance a drop of rain would travel to reach the pour point.
 
         Args:
             dem_path: Path to DEM raster.
             basins_path: Path to watershed/basins raster.
             work_dir: Working directory for temporary outputs.
+            flow_dir_path: Path to D8 flow direction raster (optional, for better accuracy).
+            pour_point_coords: (x, y) coordinates of pour point in CRS units.
 
         Returns:
-            Dict mapping watershed_id to (path_length_ft, avg_slope_ft_per_ft).
+            Dict mapping watershed_id to (path_length_ft, avg_slope_ft_per_ft,
+                                          elev_start_ft, elev_end_ft, elev_drop_ft).
         """
-        self.logger.info("Computing longest flow path statistics")
-
-        lfp_output = work_dir / "longest_flowpaths.shp"
-
-        try:
-            result = self.wbt.longest_flowpath(
-                dem=str(dem_path.resolve()),
-                basins=str(basins_path.resolve()),
-                output=str(lfp_output.resolve()),
-            )
-            if result != 0 or not lfp_output.exists():
-                self.logger.warning("Failed to compute longest flowpaths")
-                return {}
-        except Exception as e:
-            self.logger.warning(f"Error computing longest flowpaths: {e}")
-            return {}
-
-        # Read the flowpath vectors
-        try:
-            lfp_gdf = gpd.read_file(lfp_output)
-        except Exception as e:
-            self.logger.warning(f"Error reading longest flowpath output: {e}")
-            return {}
-
-        if lfp_gdf.empty:
-            return {}
+        self.logger.info("Computing longest flow path statistics via D8 backwards walk")
 
         stats = {}
 
         with rasterio.open(dem_path) as dem_src:
             dem_data = dem_src.read(1)
             dem_nodata = dem_src.nodata
-            transform = dem_src.transform
+            dem_transform = dem_src.transform
+            cell_size = dem_src.res[0]  # Assumed square cells
 
-            for idx, row in lfp_gdf.iterrows():
-                # Get watershed ID - WhiteboxTools uses 'BASIN' field
-                ws_id = row.get("BASIN", row.get("basin", idx + 1))
+        with rasterio.open(basins_path) as basin_src:
+            basin_data = basin_src.read(1)
+            basin_nodata = basin_src.nodata
+            basin_transform = basin_src.transform
 
-                geom = row.geometry
-                if geom is None or geom.is_empty:
-                    continue
+        # Load flow direction if provided
+        flow_dir_data = None
+        if flow_dir_path and flow_dir_path.exists():
+            with rasterio.open(flow_dir_path) as flow_src:
+                flow_dir_data = flow_src.read(1)
+                flow_dir_nodata = flow_src.nodata
 
-                # Handle both LineString and MultiLineString
-                if hasattr(geom, "geoms"):
-                    # MultiLineString - take the longest one
-                    lines = list(geom.geoms)
-                    geom = max(lines, key=lambda g: g.length)
+        # Get unique watershed IDs
+        unique_basins = np.unique(basin_data)
+        if basin_nodata is not None:
+            unique_basins = unique_basins[unique_basins != basin_nodata]
+        unique_basins = unique_basins[unique_basins > 0]
 
-                if not isinstance(geom, LineString):
-                    continue
+        for ws_id in unique_basins:
+            ws_id = int(ws_id)
 
-                # Calculate path length (in CRS units, assumed feet)
-                path_length = geom.length
+            # Create mask for this watershed
+            ws_mask = basin_data == ws_id
+            if not np.any(ws_mask):
+                continue
 
-                if path_length <= 0:
-                    continue
+            # Find pour point for this watershed
+            # The pour point is typically the cell with the lowest elevation in the watershed
+            # or the provided coordinates if available
+            pour_r, pour_c = None, None
 
-                # Sample elevations along the path at regular intervals
-                # Use more sample points for longer paths
-                num_samples = max(10, min(100, int(path_length / 50)))
-                sample_distances = np.linspace(0, path_length, num_samples)
+            if pour_point_coords and len(unique_basins) == 1:
+                # Single watershed - use provided pour point coordinates
+                pour_c, pour_r = ~basin_transform * pour_point_coords
+                pour_r, pour_c = int(round(pour_r)), int(round(pour_c))
+                if not (0 <= pour_r < basin_data.shape[0] and 0 <= pour_c < basin_data.shape[1]):
+                    pour_r, pour_c = None, None
+                elif basin_data[pour_r, pour_c] != ws_id:
+                    pour_r, pour_c = None, None
 
-                elevations = []
-                for dist in sample_distances:
-                    point = geom.interpolate(dist)
-                    x, y = point.x, point.y
+            if pour_r is None or pour_c is None:
+                # Find the lowest elevation cell in the watershed as pour point
+                ws_elevs = np.where(ws_mask, dem_data, np.inf)
+                min_idx = np.argmin(ws_elevs)
+                pour_r, pour_c = np.unravel_index(min_idx, ws_elevs.shape)
 
-                    # Convert to raster indices
-                    try:
-                        r, c = rowcol(transform, x, y)
-                        if 0 <= r < dem_data.shape[0] and 0 <= c < dem_data.shape[1]:
-                            elev = dem_data[r, c]
-                            if dem_nodata is None or elev != dem_nodata:
-                                elevations.append((dist, float(elev)))
-                    except (IndexError, ValueError):
-                        continue
+            # Compute flow distances from all cells in watershed to pour point
+            # using D8 backwards walk
+            if flow_dir_data is not None:
+                distances, elevations = self._compute_d8_distances(
+                    flow_dir_data, dem_data, ws_mask, pour_r, pour_c,
+                    cell_size, dem_nodata, flow_dir_nodata
+                )
+            else:
+                # Fallback: use simple distance calculation
+                self.logger.warning(
+                    f"No flow direction provided for watershed {ws_id}, "
+                    "using Euclidean distance approximation"
+                )
+                distances = self._compute_euclidean_distances(
+                    ws_mask, pour_r, pour_c, cell_size
+                )
+                elevations = dem_data.copy()
 
-                if len(elevations) < 2:
-                    continue
+            if distances is None or not np.any(distances > 0):
+                continue
 
-                # Compute average slope along the path
-                # Method: Average of segment slopes (weighted by segment length)
-                total_weighted_slope = 0.0
-                total_weight = 0.0
+            # Find the cell with maximum flow distance (furthest from pour point)
+            max_dist = np.max(distances)
+            max_idx = np.argmax(distances)
+            max_r, max_c = np.unravel_index(max_idx, distances.shape)
 
-                for i in range(1, len(elevations)):
-                    dist_prev, elev_prev = elevations[i - 1]
-                    dist_curr, elev_curr = elevations[i]
+            # Get elevations
+            elev_start = float(elevations[max_r, max_c])  # Elevation at furthest point
+            elev_end = float(elevations[pour_r, pour_c])  # Elevation at pour point
+            elev_drop = elev_start - elev_end  # Total elevation drop
 
-                    segment_length = dist_curr - dist_prev
-                    if segment_length > 0:
-                        segment_slope = abs(elev_prev - elev_curr) / segment_length
-                        total_weighted_slope += segment_slope * segment_length
-                        total_weight += segment_length
+            # Compute average slope
+            if max_dist > 0:
+                avg_slope = abs(elev_drop) / max_dist
+            else:
+                avg_slope = 0.0
 
-                if total_weight > 0:
-                    avg_slope = total_weighted_slope / total_weight
-                else:
-                    # Fallback: overall slope
-                    elev_start = elevations[0][1]
-                    elev_end = elevations[-1][1]
-                    avg_slope = abs(elev_start - elev_end) / path_length
+            # Sanity check: minimum distance should be roughly sqrt(area)
+            area_sqft = np.sum(ws_mask) * (cell_size ** 2)
+            min_expected_dist = np.sqrt(area_sqft)
 
-                stats[int(ws_id)] = (path_length, avg_slope)
+            if max_dist < min_expected_dist * 0.5:
+                self.logger.warning(
+                    f"Watershed {ws_id}: Computed hydraulic length {max_dist:.2f} ft "
+                    f"is less than expected minimum {min_expected_dist:.2f} ft "
+                    f"(sqrt of area {area_sqft:.2f} ft²)"
+                )
+
+            stats[ws_id] = (max_dist, avg_slope, elev_start, elev_end, elev_drop)
+            self.logger.debug(
+                f"Watershed {ws_id}: length={max_dist:.2f} ft, "
+                f"slope={avg_slope:.6f}, drop={elev_drop:.2f} ft"
+            )
 
         self.logger.info(f"Computed flow path stats for {len(stats)} watersheds")
         return stats
+
+    def _compute_d8_distances(
+        self,
+        flow_dir: np.ndarray,
+        dem: np.ndarray,
+        ws_mask: np.ndarray,
+        pour_r: int,
+        pour_c: int,
+        cell_size: float,
+        dem_nodata: Optional[float],
+        flow_nodata: Optional[float],
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Compute flow distances by walking D8 grid backwards from pour point.
+
+        D8 encoding (WhiteboxTools):
+        1=E, 2=SE, 4=S, 8=SW, 16=W, 32=NW, 64=N, 128=NE
+
+        Args:
+            flow_dir: D8 flow direction array.
+            dem: DEM elevation array.
+            ws_mask: Boolean mask for watershed.
+            pour_r, pour_c: Row, col of pour point.
+            cell_size: Cell size in feet.
+            dem_nodata: DEM nodata value.
+            flow_nodata: Flow direction nodata value.
+
+        Returns:
+            (distances, elevations) arrays, or (None, None) on error.
+        """
+        rows, cols = flow_dir.shape
+
+        # D8 direction mappings: value -> (dr, dc)
+        d8_map = {
+            1: (0, 1),      # E
+            2: (1, 1),      # SE
+            4: (1, 0),      # S
+            8: (1, -1),     # SW
+            16: (0, -1),    # W
+            32: (-1, -1),   # NW
+            64: (-1, 0),    # N
+            128: (-1, 1),   # NE
+        }
+
+        # Reverse mapping: to find cells that flow TO (r, c), we need cells
+        # at (r + dr, c + dc) that have direction pointing to (r, c)
+        # This means we need the opposite direction
+        reverse_map = {
+            1: (0, -1),     # Cell to the W flows E to current cell
+            2: (-1, -1),    # Cell to the NW flows SE to current cell
+            4: (-1, 0),     # Cell to the N flows S to current cell
+            8: (-1, 1),     # Cell to the NE flows SW to current cell
+            16: (0, 1),     # Cell to the E flows W to current cell
+            32: (1, 1),     # Cell to the SE flows NW to current cell
+            64: (1, 0),     # Cell to the S flows N to current cell
+            128: (1, -1),   # Cell to the SW flows NE to current cell
+        }
+
+        # Initialize distance array
+        distances = np.zeros((rows, cols), dtype=np.float32)
+        visited = np.zeros((rows, cols), dtype=bool)
+
+        # BFS from pour point backwards through the flow network
+        from collections import deque
+        queue = deque([(pour_r, pour_c, 0.0)])
+        visited[pour_r, pour_c] = True
+
+        while queue:
+            r, c, dist = queue.popleft()
+            distances[r, c] = dist
+
+            # Find all cells that flow TO (r, c)
+            for d8_val, (dr, dc) in reverse_map.items():
+                nr, nc = r + dr, c + dc
+
+                # Check bounds
+                if not (0 <= nr < rows and 0 <= nc < cols):
+                    continue
+
+                # Check if already visited
+                if visited[nr, nc]:
+                    continue
+
+                # Check if in watershed
+                if not ws_mask[nr, nc]:
+                    continue
+
+                # Check if this cell flows to (r, c)
+                cell_flow_dir = flow_dir[nr, nc]
+                if flow_nodata is not None and cell_flow_dir == flow_nodata:
+                    continue
+
+                if cell_flow_dir != d8_val:
+                    continue
+
+                # Compute distance increment
+                # Diagonal cells are sqrt(2) * cell_size apart
+                if abs(dr) + abs(dc) == 2:  # Diagonal
+                    step_dist = cell_size * np.sqrt(2)
+                else:  # Cardinal
+                    step_dist = cell_size
+
+                new_dist = dist + step_dist
+
+                # Add to queue
+                queue.append((nr, nc, new_dist))
+                visited[nr, nc] = True
+
+        return distances, dem
+
+    def _compute_euclidean_distances(
+        self,
+        ws_mask: np.ndarray,
+        pour_r: int,
+        pour_c: int,
+        cell_size: float,
+    ) -> np.ndarray:
+        """Compute Euclidean distances from pour point (fallback method).
+
+        Args:
+            ws_mask: Boolean mask for watershed.
+            pour_r, pour_c: Row, col of pour point.
+            cell_size: Cell size in feet.
+
+        Returns:
+            Distance array.
+        """
+        rows, cols = ws_mask.shape
+
+        # Create coordinate grids
+        r_coords = np.arange(rows)[:, np.newaxis] - pour_r
+        c_coords = np.arange(cols)[np.newaxis, :] - pour_c
+
+        # Compute Euclidean distances
+        distances = np.sqrt(r_coords**2 + c_coords**2) * cell_size
+
+        # Mask to watershed only
+        distances = np.where(ws_mask, distances, 0)
+
+        return distances
 
     def _save_output(
         self,
@@ -565,6 +744,9 @@ class WatershedBoundaryGenerator:
             elev_mean = row.get("elev_mean")
             lfp_length = row.get("lfp_length")
             lfp_slope = row.get("lfp_slope")
+            lfp_elev_start = row.get("lfp_elev_start")
+            lfp_elev_end = row.get("lfp_elev_end")
+            lfp_elev_drop = row.get("lfp_elev_drop")
 
             # Select color based on watershed_id
             color = colors[watershed_id % len(colors)]
@@ -611,6 +793,9 @@ class WatershedBoundaryGenerator:
                             (1040, elev_mean if elev_mean is not None else 0.0),
                             (1040, lfp_length if lfp_length is not None else 0.0),
                             (1040, lfp_slope if lfp_slope is not None else 0.0),
+                            (1040, lfp_elev_start if lfp_elev_start is not None else 0.0),
+                            (1040, lfp_elev_end if lfp_elev_end is not None else 0.0),
+                            (1040, lfp_elev_drop if lfp_elev_drop is not None else 0.0),
                         ],
                     )
 
