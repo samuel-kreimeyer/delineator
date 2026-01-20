@@ -71,6 +71,10 @@ class ReportGenerator:
             "elev_max",
             "elev_mean",
             "lfp_length",
+            "lfp_slope",
+            "lfp_elev_start",
+            "lfp_elev_end",
+            "lfp_elev_drop",
         ]
         available_columns = [c for c in columns if c in watersheds_gdf.columns]
 
@@ -122,13 +126,21 @@ class ReportGenerator:
                 f"Watershed {ws['watershed_id']}: {ws['point_name']}",
                 f"  Area: {ws['area_acres']:.2f} acres ({ws['area_sqmi']:.4f} mi²)",
                 f"  Elevation: min={ws['elev_min_ft']:.2f} ft, max={ws['elev_max_ft']:.2f} ft, mean={ws['elev_mean_ft']:.2f} ft",
-                (
-                    f"  Hydraulic distance (longest flow path): {ws['hydraulic_distance_ft']:.2f} ft"
-                    if ws.get("hydraulic_distance_ft") is not None
-                    else "  Hydraulic distance (longest flow path): N/A"
-                ),
-                "",
             ])
+
+            # Hydraulic distance (longest flow path) information
+            if ws.get("hydraulic_distance_ft") is not None:
+                lines.append(f"  Hydraulic distance (longest flow path): {ws['hydraulic_distance_ft']:.2f} ft")
+                if ws.get("lfp_slope") is not None:
+                    lines.append(f"    Average slope: {ws['lfp_slope']:.6f} ft/ft ({ws['lfp_slope']*100:.4f}%)")
+                if ws.get("lfp_elev_drop_ft") is not None:
+                    lines.append(f"    Elevation drop: {ws['lfp_elev_drop_ft']:.2f} ft")
+                if ws.get("lfp_elev_start_ft") is not None and ws.get("lfp_elev_end_ft") is not None:
+                    lines.append(f"    Start elevation: {ws['lfp_elev_start_ft']:.2f} ft, End elevation: {ws['lfp_elev_end_ft']:.2f} ft")
+            else:
+                lines.append("  Hydraulic distance (longest flow path): N/A")
+
+            lines.append("")
 
         lines.extend([
             "=" * 60,
@@ -155,6 +167,10 @@ class ReportGenerator:
                 "elev_mean_ft": float(row.get("elev_mean", 0)) if row.get("elev_mean") is not None else None,
                 # Longest flow path (hydraulic distance) in feet (if available)
                 "hydraulic_distance_ft": float(row.get("lfp_length")) if row.get("lfp_length") is not None else None,
+                "lfp_slope": float(row.get("lfp_slope")) if row.get("lfp_slope") is not None else None,
+                "lfp_elev_start_ft": float(row.get("lfp_elev_start")) if row.get("lfp_elev_start") is not None else None,
+                "lfp_elev_end_ft": float(row.get("lfp_elev_end")) if row.get("lfp_elev_end") is not None else None,
+                "lfp_elev_drop_ft": float(row.get("lfp_elev_drop")) if row.get("lfp_elev_drop") is not None else None,
             }
             watersheds.append(ws_data)
 
