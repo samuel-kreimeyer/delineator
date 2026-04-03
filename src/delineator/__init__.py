@@ -11,6 +11,7 @@ from delineator.hydrology.flow import FlowModeler
 from delineator.hydrology.watershed import WatershedDelineator
 from delineator.output.boundaries import WatershedBoundaryGenerator
 from delineator.output.reports import ReportGenerator
+from delineator.workflow import run_delineation
 
 __all__ = [
     "__version__",
@@ -29,4 +30,5 @@ __all__ = [
     "WatershedDelineator",
     "WatershedBoundaryGenerator",
     "ReportGenerator",
+    "run_delineation",
 ]

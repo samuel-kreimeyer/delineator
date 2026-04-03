@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "delineator"
 version = "0.1.0"
-description = "Watershed delineation automation from LandXML TIN surfaces using WhiteBox Tools"
+description = "Core watershed delineation library for LandXML TIN surfaces using WhiteBox Tools"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -46,13 +46,8 @@ dev = [
     "mypy>=1.0.0",
 ]
 
-[project.scripts]
-delineator = "delineator.cli:main"
-
 [project.urls]
-Homepage = "https://github.com/example/delineator"
-Documentation = "https://github.com/example/delineator#readme"
-Repository = "https://github.com/example/delineator"
+Repository = "https://github.com/samuel-kreimeyer/Curatores-Viarum"
 
 [tool.setuptools.packages.find]
 where = ["src"]

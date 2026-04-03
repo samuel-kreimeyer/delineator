@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "delineator-cli"
+version = "0.1.0"
+description = "CLI application for watershed delineation from LandXML TIN surfaces"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "delineator",
+]
+
+[project.scripts]
+delineator = "delineator_cli.main:entrypoint"
+
+[tool.setuptools.packages.find]
+where = ["src"]
